@@ -244,6 +244,10 @@ static int process_SSL_bio(void *ssl, int bio_offset, u32 *fd, u32 *bio_type) {
         return ret;
     }
 
+    // ssl->wbio/rbio is a heap pointer, which Android tags in the top byte.
+    // Every read through it fails with -EFAULT unless the tag is masked off.
+    ssl_bio_addr = (u64)(uintptr_t)UNTAG((void *)ssl_bio_addr);
+
     // get ssl->bio->method->type
     *bio_type = process_BIO_type(ssl_bio_addr);
 
@@ -252,13 +256,17 @@ static int process_SSL_bio(void *ssl, int bio_offset, u32 *fd, u32 *bio_type) {
     ret = bpf_probe_read_user(&ssl_bio_num_addr, sizeof(ssl_bio_num_addr),
                               ssl_bio_num_ptr);
     if (ret) {
+        // Do not bail out: ssl->bio->num may be unavailable (e.g. a BIO that
+        // is not a socket), and the ssl_st_fd map recorded by SSL_set_fd is
+        // then the only way to learn the fd.
         debug_bpf_printk(
             "(OPENSSL) bpf_probe_read ssl_bio_num_ptr failed, ret: %d\n",
             ret);
-        return ret;
+        *fd = 0;
+    } else {
+        *fd = (u32)ssl_bio_num_addr;
     }
 
-    *fd = (u32)ssl_bio_num_addr;
     if (*fd == 0) {
         u64 ssl_addr = (u64)ssl;
         u64 *fd_ptr = bpf_map_lookup_elem(&ssl_st_fd, &ssl_addr);
