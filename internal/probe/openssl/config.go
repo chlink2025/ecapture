@@ -22,7 +22,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -367,13 +366,15 @@ func (c *Config) getSslBpfFile(soPath, sslVersion string) error {
 }
 
 func detectOpenssl(soPath string) (string, error) {
-	f, err := os.OpenFile(soPath, os.O_RDONLY, os.ModePerm)
+	f, err := os.Open(soPath)
 	if err != nil {
 		return "", fmt.Errorf("can not open %s, with error:%w", soPath, err)
 	}
+	defer f.Close()
+
 	r, e := elf.NewFile(f)
 	if e != nil {
-		return "", fmt.Errorf("parse the ELF file  %s failed, with error:%w", soPath, err)
+		return "", fmt.Errorf("parse the ELF file %s failed, with error:%w", soPath, e)
 	}
 
 	switch r.FileHeader.Machine {
@@ -392,8 +393,6 @@ func detectOpenssl(soPath string) (string, error) {
 	sectionOffset := int64(s.Offset)
 	sectionSize := s.Size
 
-	_ = r.Close()
-
 	_, err = f.Seek(0, 0)
 	if err != nil {
 		return "", err
@@ -408,11 +407,6 @@ func detectOpenssl(soPath string) (string, error) {
 
 	// e.g : OpenSSL 1.1.1j  16 Feb 2021
 	// OpenSSL 3.2.0 23 Nov 2023
-	rex, err := regexp.Compile(`(OpenSSL\s\d\.\d\.[0-9a-z]+)`)
-	if err != nil {
-		return "", err
-	}
-
 	buf := make([]byte, 1024*1024) // 1Mb
 	totalReadCount := 0
 	for totalReadCount < int(sectionSize) {
@@ -428,9 +422,7 @@ func detectOpenssl(soPath string) (string, error) {
 			break
 		}
 
-		match := rex.Find(buf)
-		if match != nil {
-			versionKey = string(match)
+		if versionKey = extractOpensslVersion(buf); versionKey != "" {
 			break
 		}
 
@@ -449,7 +441,6 @@ func detectOpenssl(soPath string) (string, error) {
 
 	}
 
-	_ = f.Close()
 	//buf = buf[:0]
 
 	if versionKey == "" {
@@ -497,14 +488,15 @@ func (c *Config) autoDetectBytecode(ver, soPath string, isAndroid bool) string {
 
 func getImpNeeded(soPath string) ([]string, error) {
 	var importedNeeded []string
-	f, err := os.OpenFile(soPath, os.O_RDONLY, os.ModePerm)
+	f, err := os.Open(soPath)
 	if err != nil {
 		return importedNeeded, fmt.Errorf("can not open %s, with error:%w", soPath, err)
 	}
+	defer f.Close()
 
 	elfFile, err := elf.NewFile(f)
 	if err != nil {
-		return importedNeeded, fmt.Errorf("parse the ELF file  %s failed, with error:%w", soPath, err)
+		return importedNeeded, fmt.Errorf("parse the ELF file %s failed, with error:%w", soPath, err)
 	}
 
 	// 打印外部依赖的动态链接库
